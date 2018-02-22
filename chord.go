@@ -5,12 +5,17 @@ import(
 	"strings"
 	"bufio"
 	"os"
+	"net/rpc"
+	"net"
+	"net/http"
 )
 
 const (
 	DEFAULT_HOST = "localhost"
 	SUCC_SIZE = 3
 )
+
+type Nothing struct {}
 
 //type my_port string
 type Node struct {
@@ -19,23 +24,13 @@ type Node struct {
 	predecessor string
 }
 
-type handler func(*Feed)
+type handler func(*Node)
 type Server chan<- handler
 
-func call(address string, method string, request interface{}, response interface{}){
-	client, err := rpc.DialHTTP("tcp",address)
-	if err != nil {
-		log.Printf("rpc.DialHTTP: %v", err)
-		return err
-	}
-	defer client.Close()
 
-	if err = client.Call(method, request, respose); err != nil {
-		log.Fatalf("client.Call %s: %v", method, err)
-		return err
-	}
-	return nil
-}
+
+
+
 
 func parse_input(){
 	//var my_message []string
@@ -76,6 +71,13 @@ func parse_input(){
 
 			case "ping":
 				port_out := parts[1]
+				address := DEFAULT_HOST + ":" + port_out
+				var message string
+				var junk Nothing
+				log.Println("talking to:",port_out)
+				if err := call(address, "Server.Ping", &junk, &message); err != nil{
+					log.Fatalf("calling Server.List: %v", err)
+				}
 
 
 			case "quit":
@@ -83,6 +85,26 @@ func parse_input(){
 
 		}
 
+	}
+}
+
+func (s Server) Ping(input *Nothing, reply *string) error{
+	
+	log.Println("PING")
+	return nil
+}
+
+func call(address string, method string, request interface{}, response interface{}) error{
+	client, err := rpc.DialHTTP("tcp", address)
+	if err != nil {
+		log.Printf("rpc.DialHTTP: %v", err)
+		return err
+	}
+	defer client.Close()
+
+	if err = client.Call(method, request, response); err != nil {
+		log.Fatalf("client.Call %s: %v", method, err)
+		return err
 	}
 	return nil
 }
@@ -95,13 +117,16 @@ func main(){
 }
 
 func serve(address string){
+	
+	my_server := new(Server)
+	rpc.Register(my_server)
 	rpc.HandleHTTP()
 	l, e := net.Listen("tcp", address)
 	if e != nil {
 		log.Fatal("listen error: ", e)
 	}
 
-	if err := http.Serve(i, nil); err != nil {
+	if err := http.Serve(l, nil); err != nil {
 		log.Fatalf("http.Serve: %v", err)
 	}
 }
