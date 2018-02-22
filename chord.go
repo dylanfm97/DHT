@@ -22,14 +22,11 @@ type Node struct {
 	finger [161]string
 	successor [SUCC_SIZE]string
 	predecessor string
+	bucket map[string]string
 }
 
 type handler func(*Node)
 type Server chan<- handler
-
-
-
-
 
 
 func parse_input(){
@@ -67,7 +64,9 @@ func parse_input(){
 				address := DEFAULT_HOST + ":" + port
 
 				log.Println("connected to ", port)
-				serve(address)
+				go func(){
+					serve(address)
+					}()	
 
 			case "ping":
 				port_out := parts[1]
@@ -89,9 +88,31 @@ func parse_input(){
 }
 
 func (s Server) Ping(input *Nothing, reply *string) error{
-	
 	log.Println("PING")
 	return nil
+}
+
+func (s Server) Get(key string, value *string) error{
+	finished := make(chan struct{})
+	s <- func(n *Node){
+		var response string
+		response = n.bucket[key]
+		*value = response
+		finished <- struct{}{}
+	}
+	<-finished
+	return nil
+}
+
+func startActor() Server {
+	ch := make(chan handler)
+	state := new(Node)
+	go func() {
+		for f := range ch {
+			f(state) 
+		}
+	}()
+	return ch
 }
 
 func call(address string, method string, request interface{}, response interface{}) error{
@@ -117,9 +138,9 @@ func main(){
 }
 
 func serve(address string){
-	
-	my_server := new(Server)
-	rpc.Register(my_server)
+	actor := startActor()
+	//my_server := new(Server)
+	rpc.Register(actor)
 	rpc.HandleHTTP()
 	l, e := net.Listen("tcp", address)
 	if e != nil {
