@@ -8,6 +8,7 @@ import(
 	"net/rpc"
 	"net"
 	"net/http"
+
 )
 
 const (
@@ -19,8 +20,8 @@ type Nothing struct {}
 
 //type my_port string
 type Node struct {
-	finger [161]string
-	successor [SUCC_SIZE]string
+	finger []string
+	successor []string
 	predecessor string
 	bucket map[string]string
 }
@@ -44,6 +45,8 @@ func parse_input(){
 		if len(parts) > 1{
 			parts[1] = strings.TrimSpace(parts[1])
 		}
+
+		//log.Println(parts[0])
 
 		//if nothing is types, that's fine
 		if len(parts) == 0{
@@ -78,6 +81,31 @@ func parse_input(){
 					log.Fatalf("calling Server.List: %v", err)
 				}
 
+			case "get":
+				key_address := strings.SplitN(parts[1], " ", 2)
+				key := key_address[0]
+				port_out := key_address[1]
+				address := DEFAULT_HOST + ":" + port_out
+				var value string
+				log.Println("talking to:", port_out)
+				if err := call(address, "Server.Get", key, &value); err != nil{
+					log.Fatalf("calling Server.Get: %v", err)
+				}
+				log.Println(value)
+
+			case "put":
+				value_address := strings.SplitN(parts[1], " ", 3)
+				key_value := value_address[0] + " " + value_address[1]
+				//value := value_address[1]
+				port_out := value_address[2]
+				address := DEFAULT_HOST + ":" + port_out
+				//log.Println(key_value)				
+				log.Println("talking to:", port_out)
+				var junk string
+				if err := call(address, "Server.Put", key_value, &junk); err != nil{
+					log.Fatalf("calling Server.Put: %v", err)
+				}
+
 
 			case "quit":
 				os.Exit(2)
@@ -104,9 +132,42 @@ func (s Server) Get(key string, value *string) error{
 	return nil
 }
 
+func (s Server) Put(key_value string, reply *string) error{
+	finished := make(chan struct{})
+	//log.Println("Am I making it this far?")
+	s <- func(n *Node){
+		message := strings.SplitN(key_value, " ", 2)
+		key := message[0]
+		value := message[1]
+		n.bucket[key] = value
+		finished <- struct{}{}
+	}
+	<-finished
+	return nil
+}
+
+func createNode() *Node{
+
+/*
+	finger [161]string
+	successor [SUCC_SIZE]string
+	predecessor string
+	bucket map[string]string)
+*/
+	finger := make([]string,161)
+	successor := make([]string, SUCC_SIZE)
+	predecessor := "pre"
+	bucket := make(map[string]string)
+	return &Node {
+		finger,
+		successor,
+		predecessor,
+		bucket}
+}
+
 func startActor() Server {
 	ch := make(chan handler)
-	state := new(Node)
+	state := createNode()
 	go func() {
 		for f := range ch {
 			f(state) 
