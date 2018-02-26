@@ -106,6 +106,17 @@ func parse_input(){
 					log.Fatalf("calling Server.Put: %v", err)
 				}
 
+			case "delete":
+				key_address := strings.SplitN(parts[1], " ", 2)
+				key := key_address[0]
+				port_out := key_address[1]
+				address := DEFAULT_HOST + ":" + port_out
+				var junk string
+				log.Println("talkiing to:", port_out)
+				if err := call(address, "Server.Delete", key, &junk); err != nil{
+					log.Fatalf("calling Server.Delete: %v", err)
+				}
+
 
 			case "quit":
 				os.Exit(2)
@@ -136,6 +147,7 @@ func (s Server) Put(key_value string, reply *string) error{
 	finished := make(chan struct{})
 	//log.Println("Am I making it this far?")
 	s <- func(n *Node){
+		//parse the message into its key and value
 		message := strings.SplitN(key_value, " ", 2)
 		key := message[0]
 		value := message[1]
@@ -146,14 +158,18 @@ func (s Server) Put(key_value string, reply *string) error{
 	return nil
 }
 
+func (s Server) Delete(key string, reply *string) error{
+	finished := make(chan struct{})
+	s <- func(n *Node){
+		delete(n.bucket, key)
+		finished <- struct{}{}
+	}
+	<-finished
+	return nil
+}
+
 func createNode() *Node{
 
-/*
-	finger [161]string
-	successor [SUCC_SIZE]string
-	predecessor string
-	bucket map[string]string)
-*/
 	finger := make([]string,161)
 	successor := make([]string, SUCC_SIZE)
 	predecessor := "pre"
