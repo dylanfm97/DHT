@@ -15,6 +15,8 @@ import(
 	//"math"
 )
 
+var is_joining bool
+
 const (
 	DEFAULT_HOST = "localhost"
 	SUCC_SIZE = 3
@@ -33,6 +35,7 @@ type Node struct {
 	address string
 	finger []string
 	successor string
+	successors []string
 	predecessor string
 	bucket map[string]string
 }
@@ -78,8 +81,6 @@ func parse_input(){
 			parts[1] = strings.TrimSpace(parts[1])
 		}
 
-		//log.Println(parts[0])
-
 		//if nothing is types, that's fine
 		if len(parts) == 0{
 			continue
@@ -112,6 +113,7 @@ func parse_input(){
 				address := getLocalAddress() + ":" + port
 				successor := parts[1]
 
+				is_joining = true
 				log.Println("connected to", getLocalAddress() + ":" + port)
 				go func(){
 					serve(address, successor, port)//the address to listen, my successor,the port I am at
@@ -151,6 +153,9 @@ func parse_input(){
 				//log.Println(key_value)				
 				//log.Println("talking to:", address)
 				var junk string
+
+				log.Println("the address that I am to call:", address)
+
 				if err := call(address, "Server.Put", key_value, &junk); err != nil{
 					log.Fatalf("calling Server.Put: %v", err)
 				}
@@ -161,7 +166,7 @@ func parse_input(){
 				port_out := key_address[1]
 				address := getLocalAddress() + ":" + port_out
 				var junk string
-				log.Println("talkiing to:", port_out)
+				log.Println("talking to:", port_out)
 				if err := call(address, "Server.Delete", key, &junk); err != nil{
 					log.Fatalf("calling Server.Delete: %v", err)
 				}
@@ -180,13 +185,32 @@ func parse_input(){
 				//log.Println("local address:",local_address)
 
 			case "quit":
+				//give my bucket to my successor
+				address := getLocalAddress() + ":" + port
+
+				var my_bucket map[string]string
+				var my_successor string
+				var junk Nothing
+
+				log.Println("The address I'm about to connect to", address)
+				call(address, "Server.Get_Bucket", &junk, &my_bucket)
+				call(address, "Server.Get_Successor", &junk, &my_successor)
+
+				for k,v := range my_bucket{
+					log.Println(k, v)
+				}
+
+				log.Println("my successor is:", my_successor)
+				call(my_successor, "Server.Put_All", &my_bucket, &junk)
+
 				os.Exit(2)
 		}
 	}
 }
 
 func (s Server) Ping(input *Nothing, reply *string) error{
-	log.Println("PING")
+//	log.Println("PING")
+	*reply = "hello"
 	return nil
 }
 
@@ -227,6 +251,7 @@ func (s Server) Delete(key string, reply *string) error{
 	return nil
 }
 
+
 func (s Server) Dump(junk *Nothing, reply *string) error{
 	finished := make(chan struct{})
 	s <- func(n *Node){
@@ -241,103 +266,182 @@ func (s Server) Dump(junk *Nothing, reply *string) error{
 		//print the bucket
 		log.Println("Bucket:")
 		for key, value := range n.bucket {
-			log.Println("        ",key, value)
-			
+			log.Println("        ",key, value)			
 		}
 		
 		log.Println("Successor:", n.successor)
 		//print the successors
+		log.Println("Successor 0:",n.successors[0])
+		log.Println("Successor 1:",n.successors[1])
+		log.Println("Successor 2:",n.successors[2])
 
+		/*
+		if n.successors[1] != "" {
+			log.Println("Successor 2:", n.successors[1])
+		}
+		*/
 		log.Println("Predecessor:", n.predecessor)
-
 		log.Println("Fingers:")
 		//reached := false
-		for i := 161; i > 0; i-- {
-
-			/*
-			if elt != "" {
-				if i == 1{
-					log.Println("        entry:",i, ":", n.finger[i])
-				}
-				if i > 1 && n.finger[i] != n.finger[i-1] {
-					log.Println("        entry:", i, ":", n.finger[i])
-				}
-			}
-			if i > 0 && !reached && elt == "" {
-				reached = true
-				log.Println("        up to ",i-1)
-			}
-			*/
-
-
-			if i < 161{ 
+		for i := 160; i > 0; i-- {
+			if i < 160{ 
 				if n.finger[i] != "" && n.finger[i] != n.finger[i+1]{
 					log.Println("        entry:",i,":",n.finger[i])
 				}
 			} else{
 				log.Println("        entry:",i,":",n.finger[i])
 			}
-
-
 		}
-		//s := fmt.Sprintf("%040x", n.id)
-		
-
+		//s := fmt.Sprintf("%040x", n.id)		
 		}
 	<-finished
 	return nil
 }
 
 
+
 func (s Server) Stabilize() error{
 	finished := make(chan struct{})
 	s <- func(n *Node){
+
+		//If I just joined the ring, issue a get_all to my successor
+
+		
+			if is_joining {
+				new_bucket := make(map[string]string)
+				call(n.successor, "Server.Get_All", &n.address, &new_bucket)
+				log.Println("sent:")
+				for k,v := range new_bucket {
+					log.Println(k,v)
+					n.bucket[k] = v
+				is_joining = false
+			}
+			is_joining = false
+		}
+
+
 		my_succ_address := n.successor
 		//log.Println("my address is,", address)
 		//log.Println("the address of my successor is", my_succ_address)
-		var succ_pred string //my sucessor's predecessor
+		var succ_pred string //my sucessor's predecessor; the predecessor of my successor
+		var succ_succs []string //the successor list of my successor
 		var junk Nothing 
 
 		if my_succ_address != "" {//assuming I have a successor
 			//get the predecessor of my successor
-			if my_succ_address  != n.address {
-				
-				if err := call(my_succ_address, "Server.GetPredecessor", &junk, &succ_pred); err != nil {
-					log.Fatalf("calling Server.GetPredecessor: %v", err)	
+			if my_succ_address  != n.address {				
+				var ping_reply string
+
+				//log.Println("the address I am about to connect to", my_succ_address)
+				call(my_succ_address, "Server.Ping", &junk, &ping_reply)
+					//log.Fatalf("calling Server.Ping: %v", err)
+				//ping_reply = "wuddup"			
+				//log.Println("Ping results:", ping_reply)
+				if ping_reply == "hello"{
+					//rpc call to get my successor's predecessor
+					call(my_succ_address, "Server.GetPredecessor", &junk, &succ_pred)
+						//log.Fatalf("calling Server.GetPredecessor: %v", err)	
+					
+					//getting my successor's successor list
+					call(my_succ_address, "Server.GetSuccessorList", &junk, &succ_succs)
+						//log.Fatalf("calling Server.GetSuccessorList: %v", err)
+
+					//shift everything up in my successor's successor list		
+					succ_list_copy := succ_succs
+					for i := SUCC_SIZE - 1; i > 0; i-- {
+						if i != 0 {
+							succ_list_copy[i] = succ_list_copy[i-1]
+						}
+					}
+					succ_list_copy[0] = n.successor
+					n.successors = succ_list_copy
+					/*
+				log.Println("the successor list of my successor:")
+				for _,elt := range succ_succs {
+					log.Println(elt)
 				}
-				
-			} else {
+					*/
+				} else { //if the ping to my successor failed					
+					//shift my succesor list down
+					for i := 0; i < SUCC_SIZE; i++{
+						if i != SUCC_SIZE - 1 {
+							n.successors[i] = n.successors[i+1]
+						}
+					}
+					//if there are only a couple nodes, get rid of the stragglers at the end
+					for i := 1; i < SUCC_SIZE; i++ {
+						if n.successors[i] == n.successor{
+							n.successors[i] = ""
+						}else if n.successors[i] == my_succ_address{
+							//if my successor that isn't there is later in my successor list, get rid of it
+							n.successors[i] = "";
+						}
+
+					}
+					//my new successor is whatever is next in my list
+					n.successor = n.successors[0]
+
+
+					//tell my new successor that it's predecessor is Dead
+					if(n.successor != n.address){
+						call(n.successor, "Server.ClearPredecessor", &junk, &junk)
+					}
+
+					//clear my predeceessor
+					//n.predecessor = ""
+					is_empty := true //for the special case of if I am the last node left in the ring
+					//check if my successor list is empty
+					for i :=0; i < SUCC_SIZE; i++ {
+						if n.successors[i] != "" {
+							is_empty = false
+						}
+					}
+					if is_empty { 
+						//log.Println("my successor list is empty")
+						//if my successor list is empty, reset it so my first value is myself
+						n.successors[0] = n.address
+						//n.successor = n.address
+						my_succ_address = n.address
+						n.successor = n.address
+						n.predecessor = ""
+						log.Println("successor changed:", n.successor)
+					}
+				}
+			}
+
+			if n.successor == n.address {//if my successor is myself, then predecessor of my successor is my own predecessor
 				succ_pred = n.predecessor
 			}
 			//if the predecessor of my successor is between me and my successor
-			//log.Println("n.id", n.id, "hashString(succ_pred)", hashString(succ_pred), "hashString(n.successor[0])",hashString(n.successor[0]))
 			if succ_pred != "" && between(n.id,hashString(succ_pred),hashString(n.successor), false){
 				//set my successor to the predecessor of what I thought was my successor
 				n.successor = succ_pred
 				log.Println("successor changed:", succ_pred)
+				}
 			}else{
-				//still tell my successor about me
-				//my succ_pred is just my successor
+				
 			}
-			var junk string
+			//var junk string
 			//notify my new successor that I believe I am it's predecessor
 			//if my successor doesn't have a predecessor, and my successor is not myself, then notify my successor
 			if succ_pred == "" {
 				//if my successor does not have a predecessor 
-				if my_succ_address != n.address {
-					if err := call(my_succ_address, "Server.Notify", n.address, &junk); err != nil {
-						log.Fatalf("calling Server.Notify: %v", err)
-					}
+				if n.successor != n.address {//notify my new successor that I am it's predecessor
+					//log.Println("the address I am about to Notify", n.successor)
+					call(n.successor, "Server.Notify", n.address, &junk)
+						//log.Fatalf("calling Server.Notify: %v", err)	
 				} else { //if my successor is myself, set my predecessor to myself?
-					//log.Println("idk")
+					
 				}
 			//otherwise, if my successor does have a predecessor, and it isn't me, notify that address that I am its successor
 			}else if succ_pred != n.address{
-				if err := call(n.successor, "Server.Notify", n.address, &junk); err != nil {
-					log.Fatalf("calling Server.Notify: %v", err)
-				}
+				call(n.successor, "Server.Notify", n.address, &junk)
+					//log.Fatalf("calling Server.Notify: %v", err)
+				
 			} 
-		}
+
+			
+		
 		//log.Println("Stabilized")
 		finished <- struct{}{}
 	}
@@ -355,7 +459,38 @@ func (s Server) GetPredecessor(input *Nothing, reply *string) error {
 	return nil
 }
 
-func (s Server) Notify(node_address string, reply *string) error{
+func (s Server) GetSuccessorList(input *Nothing, reply *[]string) error {
+	finished := make(chan struct{})
+	s <- func(n *Node){
+		*reply = n.successors
+		finished <- struct{}{}
+	}
+	<-finished
+	return nil
+}
+
+func (s Server) Get_Bucket(input *Nothing, reply *map[string]string) error{
+	finished := make(chan struct{})
+	s <- func(n *Node){
+		*reply = n.bucket
+		finished <- struct{}{}
+	}
+	<-finished
+	return nil
+}
+
+func (s Server) Get_Successor(input *Nothing, reply *string) error{
+	finished := make(chan struct{})
+	s <- func(n *Node){
+		*reply = n.successor
+		finished <- struct{}{}
+	}
+	<-finished
+	return nil
+}
+
+
+func (s Server) Notify(node_address string, reply *Nothing) error{
 	//this node thinks I am its successor; node_address thinks it is my predecessor
 	finished := make(chan struct{})
 	s <- func(n *Node){
@@ -370,15 +505,23 @@ func (s Server) Notify(node_address string, reply *string) error{
 	return nil
 }
 
+func (s Server) ClearPredecessor(input *Nothing, reply *Nothing) error{
+	finished := make(chan struct{})
+	s <- func(n *Node){
+		n.predecessor = "";
+		finished <- struct{}{}
+	}
+	<-finished
+	return nil
+}
+
 //ask node n to find the successor of id
 //or a better node to continue the search with
 func (s Server) Find_Successor(id *big.Int, reply *FindSucc) error{
 	finished := make(chan struct{})
 	s <- func(n *Node){
-		//log.Println("Am I making it this far?")
 		var temp FindSucc
 		if between(n.id, id, hashString(n.successor), true) {
-			//log.Println("Am I making it this far?")
 			temp.Found = true
 			temp.Successor = n.successor
 		} else {
@@ -387,13 +530,61 @@ func (s Server) Find_Successor(id *big.Int, reply *FindSucc) error{
 			temp.Successor = cpn
 		}
 		*reply = temp
-
 		finished <- struct{}{}
-		//log.Println("Am I making it this far?")
 	}
 	<-finished
 	return nil
 }
+
+func (s Server) Put_All(input *map[string]string, reply *Nothing) error{
+	finished := make(chan struct{})
+	s <- func(n *Node){
+		for k, v := range *input {
+			//if the key is between me and my predecessor
+			log.Println("the bucket that I am recieving:")
+			for k, v := range(*input){
+				log.Println(k, v)
+			}
+
+			
+			n.bucket[k] = v
+			
+		}
+		finished <- struct{}{}
+	}
+	<-finished
+	return nil
+}
+
+func (s Server) Get_All(input *string, reply *map[string]string) error{
+	finished := make(chan struct{})
+	s <- func(n *Node){
+		//input is an address of a node that is between my and my predecessor
+
+		my_predecessor := n.predecessor
+
+		temp := make(map[string]string)
+		if n.predecessor == ""{
+		//	my_predecessor = n.address
+		}
+		//log.Println("my pred",n.predecessor)
+		//loop over my bucket
+		for k, v := range n.bucket{
+			if between(hashString(my_predecessor), hashString(k), hashString(*input), false){
+			//if find(*hashString(k), n.successor) != n.address{//if this key shouldn't be here
+				//if the key belongs to the new node
+				temp[k] = v;
+				delete(n.bucket, k)
+			}
+		}
+		*reply = temp
+
+		finished <- struct{}{}
+	}
+	<-finished
+	return nil
+}
+
 
 func (n *Node) find_successor(id *big.Int) *FindSucc {
 	var temp FindSucc
@@ -411,62 +602,22 @@ func (n *Node) find_successor(id *big.Int) *FindSucc {
 	return &temp
 }
 
-/*
-next = next + 1 ; if (next > m)
-next = 1;
-finger[next] = find successor(n + 2next−1 );
-*/
 
-
-/*
 func (s Server) Fix_Fingers() error {
 	finished := make(chan struct{})
 	s <- func(n *Node){
-		found := false
-		next = next + 1
-		if next > 161 {
-			next = 1
-		}	
-		next_id := jump(n.address, next)
-		var succ FindSucc
-		for !found {
-			succ = *n.find_successor(next_id)
-			found = succ.Found
-			//log.Println("Am I getting stuck in an infinite while loop?")
-			if !succ.Found {
-				next_id = hashString(succ.Successor)
-				//log.Println("the next_id is", next_id)
-			}
-		}	
-		n.finger[next] = succ.Successor 
-		log.Println("finger", next, "updated")
-		finished <- struct{}{}
-	}
-	<-finished
-	return nil
-}
-*/
-
-func (s Server) Fix_Fingers() error {
-
-	finished := make(chan struct{})
-	s <- func(n *Node){
-		//log.Println("fix fingers is being called")
-/*
-		next = next + 1
-		if next > 161 {
-			next = 1
-		}
-*/
-		for next := 1; next <= 161; next++ {
+		for next := 1; next <= 160; next++ {
 			var succ FindSucc
+
 			succ = *n.find_successor(jump(n.address, next))
-			//found := succ.Found
+			if succ.Found{
+				n.finger[next] =  succ.Successor
+			}
 
-
-			n.finger[next] =  succ.Successor
+			if next == 160 {
+				//log.Println("my address:", n.address, "the successor that I found", succ.Successor)
+			}
 		}
-
 		finished <- struct{}{}
 	}
 	<-finished
@@ -474,21 +625,13 @@ func (s Server) Fix_Fingers() error {
 }
 
 //search the local table for the highest predecessor if id
-func (n Node) closest_preceding_node(id big.Int) string{
-//psuedo-code
-/*
-	for i = m downto 1
-            if (finger[i] ∈ (n,id])
-                return finger[i];
-*/
-               
-    for i := 161; i > 0; i -= 1 {
+func (n Node) closest_preceding_node(id big.Int) string{              
+    for i := 160; i > 0; i -= 1 {
     	if between(n.id, hashString(n.finger[i]), &id, true) {
     		//log.Println("I am using the finger table")
     		return n.finger[i]
     	}
     }
-    
 	return n.successor
 }
 
@@ -499,12 +642,11 @@ func find(id big.Int, start string) string {
 	maxSteps := 10
 	i := 0
 	var succ FindSucc
-
 	for !found && i < maxSteps {
 		if err := call(nextNode, "Server.Find_Successor", &id, &succ); err != nil{
-			log.Fatalf("calling Server.Find_Successor: %v", err)
+			//log.Fatalf("calling Server.Find_Successor: %v", err)
 		}
-		
+
 		found = succ.Found
 		nextNode = succ.Successor
 		//log.Println("succ.Successor", succ.Successor)
@@ -513,26 +655,8 @@ func find(id big.Int, start string) string {
 	if found {
 		return nextNode
 	}
-
 	return "did not find"
 }
-
-/*
-func (n Node) find_successor(id *big.Int) (bool, string) {
-	//var temp FindSucc
-	if between(n.id, id, hashString(n.successor[0]), true) {
-		//log.Println("Am I making it this far?")
-		//temp.Found = true
-		//temp.Successor = n.successor[0]
-		return true, n.successor[0]
-	} else {
-		//temp.Found = false
-		cpn := n.closest_preceding_node(*id)
-		//temp.Successor = cpn
-		return false, cpn
-	}
-}
-*/
 
 func call(address string, method string, request interface{}, response interface{}) error{
 	client, err := rpc.DialHTTP("tcp", address)
@@ -602,6 +726,7 @@ func main(){
 func createNode(succ_address string, address string) *Node{
 	//address := getLocalAddress() + ":" + port
 	finger := make([]string,162)
+	successors := make([]string,SUCC_SIZE)
 	var successor string
 
 	if succ_address == "" {
@@ -612,18 +737,8 @@ func createNode(succ_address string, address string) *Node{
 
 	if(succ_address != ""){
 		succ := succ_address
-		//log.Println("my successor is!!!!", succ)
-		//successor = append(successor, succ)
-		/*
-		for i, elt := range(successor){
-			if elt == "" {
-				successor = succ
-				break
-			}
-		}
-		*/
-
 		successor = succ
+		successors[0] = succ
 	}
 
 	predecessor := ""
@@ -634,6 +749,7 @@ func createNode(succ_address string, address string) *Node{
 		address,
 		finger,
 		successor,
+		successors,
 		predecessor,
 		bucket }
 }
@@ -657,14 +773,7 @@ func serve(address string, successor string, port string){
 
 	go func(){
 		for{
-			//var junk Nothing
 			actor.Stabilize()
-
-			/*
-			if err := call(address, "Server.Fix_Fingers", &junk, &junk); err != nil {
-				log.Println("Calling Server.Fix_Fingers: %v", err)
-			}
-			*/
 			actor.Fix_Fingers()
 
 			time.Sleep(time.Second)
@@ -677,11 +786,11 @@ func serve(address string, successor string, port string){
 	rpc.HandleHTTP()
 	l, e := net.Listen("tcp", address)
 	if e != nil {
-		log.Fatal("listen error: ", e)
+		//log.Fatal("listen error: ", e)
 	}
 
 	if err := http.Serve(l, nil); err != nil {
-		log.Fatalf("http.Serve: %v", err)
+		//log.Fatalf("http.Serve: %v", err)
 	}
 }
 
